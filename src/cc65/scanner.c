@@ -627,7 +627,7 @@ static void NumericConst (void)
         IVal = IVal * Base + DigitVal;
         SB_Skip (&Src);
     }
-    if (Overflow) {
+    if (Overflow && !IsFloat) {
         Error ("Numerical constant \"%s\" too large for internal %d-bit representation",
                SB_GetConstBuf (&Src), (int)(sizeof(IVal)*CHAR_BIT));
     }
@@ -731,27 +731,13 @@ static void NumericConst (void)
     } else {
 
         /* Float constant */
-        Double FVal = FP_D_FromInt (IVal);      /* Convert to double */
+        Double FVal;
 
-        /* Check for a fractional part and read it */
+        /* Check for a fractional part and skip it */
         if (SB_Peek (&Src) == '.') {
-
-            Double Scale, ScaleDigit;
-
-            /* Skip the dot */
             SB_Skip (&Src);
-
-            /* Read fractional digits */
-            ScaleDigit = FP_D_Div (FP_D_Make (1.0), FP_D_FromInt (Base));
-            Scale = ScaleDigit;
-            while (IsXDigit (SB_Peek (&Src)) && (DigitVal = HexVal (SB_Peek (&Src))) < Base) {
-                /* Get the value of this digit */
-                Double FracVal = FP_D_Mul (FP_D_FromInt (DigitVal), Scale);
-                /* Add it to the float value */
-                FVal = FP_D_Add (FVal, FracVal);
-                /* Adjust Scale for next digit */
-                Scale = FP_D_Mul (Scale, ScaleDigit);
-                /* Skip the digit */
+            while (IsXDigit (SB_Peek (&Src)) &&
+                   HexVal (SB_Peek (&Src)) < Base) {
                 SB_Skip (&Src);
             }
         }
@@ -761,52 +747,35 @@ static void NumericConst (void)
             (Base == 10 && toupper (SB_Peek (&Src)) == 'E')) {
 
             unsigned Digits;
-            unsigned Exp;
-            int Sign;
 
-            /* Skip the exponent notifier */
+            /* Skip the exponent notifier and an optional sign */
             SB_Skip (&Src);
-
-            /* Read an optional sign */
-            Sign = 0;
-            if (SB_Peek (&Src) == '-') {
-                Sign = 1;
-                SB_Skip (&Src);
-            } else if (SB_Peek (&Src) == '+') {
+            if (SB_Peek (&Src) == '-' || SB_Peek (&Src) == '+') {
                 SB_Skip (&Src);
             }
 
-            /* Read exponent digits. Since we support only 32 bit floats
-            ** with a maximum exponent of +-/127, we read the exponent
-            ** part as integer with up to 3 digits and drop the remainder.
-            ** This avoids an overflow of Exp. The exponent is always
-            ** decimal, even for hex float consts.
+            /* Skip the exponent digits (always decimal, even for hex float
+            ** constants)
             */
             Digits = 0;
-            Exp    = 0;
             while (IsDigit (SB_Peek (&Src))) {
-                if (++Digits <= 3) {
-                    Exp = Exp * 10 + HexVal (SB_Peek (&Src));
-                }
+                ++Digits;
                 SB_Skip (&Src);
             }
 
-            /* Check for errors: We must have exponent digits, and not more
-            ** than three.
-            */
+            /* Check for errors: We must have exponent digits */
             if (Digits == 0) {
                 Error ("Floating constant exponent has no digits");
-            } else if (Digits > 3) {
-                Warning ("Floating constant exponent is too large");
-            }
-
-            /* Scale the exponent and adjust the value accordingly.
-            ** Decimal exponents are base 10, hexadecimal exponents are base 2 (C99).
-            */
-            if (Exp) {
-                FVal = FP_D_Mul (FVal, FP_D_Make (pow ((Base == 16) ? 2.0 : 10.0, (Sign ? -1.0 : 1.0) * Exp)));
             }
         }
+
+        /* The digits read above only check the syntax: the C library of the
+        ** host converts the constant, rounding correctly to its double (which
+        ** is then rounded again to the format of the target: C allows the
+        ** result to be a neighbour of the nearest value). It stops at the
+        ** suffix.
+        */
+        FVal = FP_D_Make (strtod (SB_GetConstBuf (&Src), 0));
 
         /* Check for a suffix and determine the type of the constant */
         SuffixStart = SB_GetIndex (&Src);
